@@ -20,6 +20,10 @@ permissions:
   pull-requests: write
   issues: write
 
+env:
+  NODE_VERSION: '20'
+  PLAYWRIGHT_VERSION: '1.48.0'
+
 jobs:
   qa-test:
     runs-on: ubuntu-latest
@@ -32,23 +36,33 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
 
       - name: Install Dependencies
-        run: |
-          npm init -y
-          npm install playwright @anthropic-ai/claude-code
-          npx playwright install chromium --with-deps
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 'true'
+
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium --with-deps
+        # Cache Playwright browsers to avoid re-downloading
+        shell: bash
+
+      - name: Cache Playwright Browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
 
       - name: Wait for Preview Deployment
         id: preview
         if: github.event_name == 'pull_request'
+        timeout-minutes: 5
         run: |
-          # Wait for Vercel/Netlify/GitHub Pages preview deployment
-          # Customize this based on your deployment platform
-          echo "Waiting for preview deployment..."
-          sleep 30
-
           # Set preview URL - customize based on your platform
           # Examples:
           # Vercel: https://${{ github.event.repository.name }}-git-${{ github.head_ref }}-${{ github.repository_owner }}.vercel.app
@@ -59,16 +73,43 @@ jobs:
           echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
           echo "Testing URL: $PREVIEW_URL"
 
+          # Smart deployment wait: poll for HTTP 200 or timeout
+          echo "Waiting for preview deployment to be ready..."
+          max_attempts=30
+          attempt=0
+          while [ $attempt -lt $max_attempts ]; do
+            if curl -s -f -o /dev/null -w "%{http_code}" "$PREVIEW_URL" | grep -q "200"; then
+              echo "✓ Preview deployment is ready!"
+              exit 0
+            fi
+            attempt=$((attempt + 1))
+            echo "Attempt $attempt/$max_attempts: Waiting for deployment..."
+            sleep 5
+          done
+
+          echo "⚠️  Preview deployment not ready after ${max_attempts}*5 seconds, continuing anyway..."
+          exit 0
+
       - name: Create Screenshots Directory
         run: mkdir -p screenshots
 
       - name: Run AI QA Engineer
+        id: qa-run
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TEST_URL: ${{ steps.preview.outputs.preview_url || inputs.url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           TEST_FOCUS: ${{ inputs.focus || 'all' }}
         run: |
+          echo "::group::QA Testing Configuration"
+          echo "URL: $TEST_URL"
+          echo "Focus Area: $TEST_FOCUS"
+          echo "PR Number: $PR_NUMBER"
+          echo "::endgroup::"
+
+          echo "::group::Starting AI QA Engineer"
+          START_TIME=$(date +%s)
+
           npx claude-code --print \
             --mcp-config .claude/mcp-config.json \
             --system-prompt "$(cat .claude/qa-engineer-prompt.md)" \
@@ -120,7 +161,16 @@ jobs:
                 - Screenshots referenced by filename
                 - Recommendations prioritized by impact
 
-             Be thorough. Think like a user who wants to break things."
+             Be thorough. Think like a user who wants to break things." || {
+            echo "⚠️ QA testing encountered an error"
+            exit 1
+          }
+
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "✓ QA testing completed in ${DURATION}s"
+          echo "::endgroup::"
+          echo "qa_duration_seconds=$DURATION" >> $GITHUB_OUTPUT
 
       - name: Upload Screenshots
         uses: actions/upload-artifact@v4
@@ -143,6 +193,8 @@ jobs:
       - name: Post QA Report to PR
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
+        env:
+          QA_DURATION: ${{ steps.qa-run.outputs.qa_duration_seconds || '0' }}
         with:
           script: |
             const fs = require('fs');
@@ -160,6 +212,16 @@ jobs:
             } else {
               report += '⚠️ QA report was not generated. Check the [workflow logs](../actions/runs/${{ github.run_id }}) for details.';
             }
+
+            // Add metrics section
+            report += '\n\n### 📊 Metrics\n';
+            const duration = parseInt(process.env.QA_DURATION) || 0;
+            report += `- Test Duration: ${duration}s\n`;
+
+            // Estimate cost (Claude API pricing example)
+            const estimatedCost = (0.005 * duration / 60).toFixed(4);
+            report += `- Estimated Cost: $${estimatedCost}\n`;
+            report += `- Run ID: ${{ github.run_id }}\n`;
 
             report += '\n\n---\n';
             report += '*Automated testing by [AI QA Engineer](https://github.com/tyler-james-bridges/ai-qa-engineer) using Claude Code + Playwright*';
