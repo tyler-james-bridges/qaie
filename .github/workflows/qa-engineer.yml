@@ -35,13 +35,23 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Validate URL Input
+      - name: Validate inputs
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           if [ -z "${{ inputs.url }}" ]; then
             echo "❌ Error: URL is required"
             echo "Please provide a URL to test when triggering this workflow."
             exit 1
           fi
+
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "❌ Error: ANTHROPIC_API_KEY secret is not configured"
+            echo "Please add your Anthropic API key to repository secrets."
+            exit 1
+          fi
+
+          echo "✓ All validations passed"
           echo "✓ Testing URL: ${{ inputs.url }}"
 
       - name: Checkout repository
@@ -109,12 +119,6 @@ jobs:
           echo "URL: $TEST_URL"
           echo "Focus Area: $TEST_FOCUS"
           echo "::endgroup::"
-
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "❌ Error: ANTHROPIC_API_KEY secret is not set"
-            echo "Please add your Anthropic API key to repository secrets."
-            exit 1
-          fi
 
           echo "::group::Starting AI QA Engineer"
           START_TIME=$(date +%s)
