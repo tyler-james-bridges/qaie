@@ -74,7 +74,7 @@ jobs:
         run: |
           echo "Capturing screenshots for visual regression testing..."
 
-          npx claude-code --print \
+          npx @anthropic-ai/claude-code --print \
             --mcp-config .claude/mcp-config.json \
             "Navigate to $TEST_URL and capture screenshots for visual regression testing.
 
