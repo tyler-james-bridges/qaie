@@ -1,18 +1,21 @@
 name: AI QA Engineer
 
 # This workflow is designed to be copied to your repository.
-# By default, it only runs on manual trigger.
-# Uncomment the pull_request trigger below once you have a preview deployment URL configured.
+# It can run manually OR on pull requests.
+#
+# For PR testing, you need a preview deployment. Options:
+# 1. Vercel/Netlify: Set PREVIEW_URL env var in your deployment workflow
+# 2. workflow_call: Call this workflow from another workflow with the URL
+# 3. Manual: Uncomment pull_request trigger and set PREVIEW_URL secret/var
 
 on:
-  # Uncomment below to run on PRs (requires preview deployment URL configuration)
-  # pull_request:
-  #   types: [opened, synchronize, reopened]
+  pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       url:
-        description: 'URL to test (required)'
-        required: true
+        description: 'URL to test (required for manual runs)'
+        required: false
         type: string
       focus:
         description: 'Focus area: accessibility, performance, forms, mobile, all'
@@ -24,6 +27,25 @@ on:
         required: false
         type: boolean
         default: true
+  workflow_call:
+    inputs:
+      url:
+        description: 'URL to test'
+        required: true
+        type: string
+      focus:
+        description: 'Focus area'
+        required: false
+        type: string
+        default: 'all'
+      fail_on_bugs:
+        description: 'Fail on critical/high bugs'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
 
 permissions:
   contents: read
@@ -40,24 +62,38 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Validate inputs
+      - name: Determine Test URL
+        id: get-url
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_URL: ${{ inputs.url }}
+          PREVIEW_URL: ${{ vars.PREVIEW_URL || secrets.PREVIEW_URL || '' }}
         run: |
-          if [ -z "${{ inputs.url }}" ]; then
-            echo "❌ Error: URL is required"
-            echo "Please provide a URL to test when triggering this workflow."
+          # Priority: explicit input > PREVIEW_URL var/secret
+          if [ -n "$INPUT_URL" ]; then
+            echo "test_url=$INPUT_URL" >> $GITHUB_OUTPUT
+            echo "✓ Using provided URL: $INPUT_URL"
+          elif [ -n "$PREVIEW_URL" ]; then
+            echo "test_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
+            echo "✓ Using PREVIEW_URL: $PREVIEW_URL"
+          else
+            echo "❌ Error: No URL provided"
+            echo ""
+            echo "For manual runs: provide a URL in the workflow inputs"
+            echo "For PR runs: set PREVIEW_URL as a repository variable or secret"
+            echo "For Vercel/Netlify: chain this workflow after your deploy workflow"
             exit 1
           fi
 
+      - name: Validate API Key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "❌ Error: ANTHROPIC_API_KEY secret is not configured"
             echo "Please add your Anthropic API key to repository secrets."
             exit 1
           fi
-
-          echo "✓ All validations passed"
-          echo "✓ Testing URL: ${{ inputs.url }}"
+          echo "✓ API key configured"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -94,7 +130,7 @@ jobs:
         id: url-check
         run: |
           echo "Checking if URL is reachable..."
-          TEST_URL="${{ inputs.url }}"
+          TEST_URL="${{ steps.get-url.outputs.test_url }}"
 
           # Try to reach the URL
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$TEST_URL" || echo "000")
@@ -117,7 +153,7 @@ jobs:
         id: qa-run
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          TEST_URL: ${{ inputs.url }}
+          TEST_URL: ${{ steps.get-url.outputs.test_url }}
           TEST_FOCUS: ${{ inputs.focus || 'all' }}
         run: |
           echo "::group::QA Testing Configuration"
@@ -212,7 +248,7 @@ jobs:
         run: |
           echo "## AI QA Engineer Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**URL Tested:** ${{ inputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**URL Tested:** ${{ steps.get-url.outputs.test_url }}" >> $GITHUB_STEP_SUMMARY
           echo "**Focus Area:** ${{ inputs.focus || 'all' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -222,6 +258,57 @@ jobs:
           else
             echo "⚠️ No QA report generated. Check the logs for details." >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let body = '## 🤖 AI QA Engineer Report\n\n';
+            body += `**URL Tested:** ${{ steps.get-url.outputs.test_url }}\n`;
+            body += `**Focus Area:** ${{ inputs.focus || 'all' }}\n\n`;
+
+            if (fs.existsSync('qa-report.md')) {
+              const report = fs.readFileSync('qa-report.md', 'utf8');
+              body += report;
+            } else {
+              body += '⚠️ No QA report generated. Check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.\n';
+            }
+
+            body += `\n\n### 📎 Artifacts\n`;
+            body += `- [Screenshots](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n`;
+            body += `- [Full Report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n`;
+            body += '\n---\n*Automated QA testing by [AI QA Engineer](https://github.com/tyler-james-bridges/ai-qa-engineer)*';
+
+            // Find existing comment to update (avoid spam)
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('AI QA Engineer Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
 
       - name: Check for critical bugs
         if: ${{ inputs.fail_on_bugs }}
