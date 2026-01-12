@@ -1,0 +1,149 @@
+name: 'AI QA Engineer'
+description: 'AI-powered QA testing for any website. Supports multiple LLM providers.'
+author: 'tyler-james-bridges'
+
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  url:
+    description: 'URL to test'
+    required: true
+
+  # Provider selection (auto-detected if not specified)
+  provider:
+    description: 'LLM provider: anthropic, openai, codex, gemini, ollama'
+    required: false
+
+  # Provider-specific API keys (pass whichever you have)
+  anthropic_api_key:
+    description: 'Anthropic API key (for Claude)'
+    required: false
+  openai_api_key:
+    description: 'OpenAI API key (for GPT-4)'
+    required: false
+  codex_api_key:
+    description: 'Codex API key'
+    required: false
+  gemini_api_key:
+    description: 'Google Gemini API key'
+    required: false
+
+  # Generic key (use with provider input)
+  api_key:
+    description: 'Generic API key (use with provider input)'
+    required: false
+
+  # Ollama settings (for local models)
+  ollama_base_url:
+    description: 'Ollama base URL (default: http://localhost:11434)'
+    required: false
+    default: 'http://localhost:11434'
+  ollama_model:
+    description: 'Ollama model to use (default: llava)'
+    required: false
+    default: 'llava'
+
+  # Test configuration
+  viewports:
+    description: 'Viewports to test (comma-separated): desktop,mobile,tablet'
+    required: false
+    default: 'desktop,mobile'
+  focus:
+    description: 'Focus area: all, accessibility, performance, forms, visual'
+    required: false
+    default: 'all'
+  timeout:
+    description: 'Timeout in seconds'
+    required: false
+    default: '300'
+
+  # Output options
+  fail_on_bugs:
+    description: 'Fail workflow if critical/high severity bugs found'
+    required: false
+    default: 'false'
+  output_format:
+    description: 'Report format: markdown, json, sarif'
+    required: false
+    default: 'markdown'
+
+outputs:
+  report:
+    description: 'Path to the QA report file'
+  screenshots:
+    description: 'Path to screenshots directory'
+  bugs_found:
+    description: 'Number of bugs found'
+  critical_bugs:
+    description: 'Number of critical/high severity bugs'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        cd ${{ github.action_path }}
+        npm ci
+
+    - name: Install Playwright
+      shell: bash
+      run: npx playwright install chromium --with-deps
+
+    - name: Run QA Tests
+      id: qa-test
+      shell: bash
+      env:
+        INPUT_URL: ${{ inputs.url }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        INPUT_OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        INPUT_CODEX_API_KEY: ${{ inputs.codex_api_key }}
+        INPUT_GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+        INPUT_API_KEY: ${{ inputs.api_key }}
+        INPUT_OLLAMA_BASE_URL: ${{ inputs.ollama_base_url }}
+        INPUT_OLLAMA_MODEL: ${{ inputs.ollama_model }}
+        INPUT_VIEWPORTS: ${{ inputs.viewports }}
+        INPUT_FOCUS: ${{ inputs.focus }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_OUTPUT_FORMAT: ${{ inputs.output_format }}
+      run: |
+        cd ${{ github.action_path }}
+        node src/index.js
+
+    - name: Upload Screenshots
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: qa-screenshots-${{ github.run_number }}
+        path: screenshots/
+        retention-days: 14
+        if-no-files-found: ignore
+
+    - name: Upload Report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: qa-report-${{ github.run_number }}
+        path: qa-report.*
+        retention-days: 14
+        if-no-files-found: ignore
+
+    - name: Check for critical bugs
+      if: ${{ inputs.fail_on_bugs == 'true' }}
+      shell: bash
+      run: |
+        if [ -f "qa-report.json" ]; then
+          CRITICAL=$(cat qa-report.json | jq '.bugs | map(select(.severity == "critical" or .severity == "high")) | length')
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "::error::Found $CRITICAL critical/high severity bugs"
+            exit 1
+          fi
+        fi
