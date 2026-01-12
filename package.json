@@ -1,14 +1,19 @@
 {
   "name": "ai-qa-engineer",
-  "version": "1.0.0",
-  "description": "Automated, human-like testing for your Pull Requests using Claude Code + Playwright MCP",
-  "type": "module",
-  "main": "scripts/index.js",
+  "version": "2.0.0",
+  "description": "AI-powered QA testing for any website. Supports multiple LLM providers: Anthropic, OpenAI, Gemini, Ollama.",
+  "main": "src/index.js",
+  "bin": {
+    "ai-qa": "src/index.js"
+  },
   "keywords": [
     "qa",
     "testing",
     "playwright",
     "claude",
+    "openai",
+    "gpt",
+    "gemini",
     "ai",
     "automation",
     "github-actions"
@@ -28,8 +33,9 @@
     "npm": ">=10.0.0"
   },
   "scripts": {
-    "lint": "eslint scripts/",
-    "lint:fix": "eslint scripts/ --fix",
+    "start": "node src/index.js",
+    "lint": "eslint scripts/ src/",
+    "lint:fix": "eslint scripts/ src/ --fix",
     "test": "node --test scripts/**/*.test.js",
     "test:watch": "node --test --watch scripts/**/*.test.js",
     "install:browsers": "playwright install chromium",
@@ -37,7 +43,9 @@
     "visual:update-baseline": "node scripts/visual-regression.cjs update-baseline"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^2.0.76",
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@google/generative-ai": "^0.21.0",
+    "openai": "^4.77.0",
     "pixelmatch": "^7.1.0",
     "playwright": "^1.48.0",
     "pngjs": "^7.0.0"
