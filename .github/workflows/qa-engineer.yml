@@ -164,11 +164,10 @@ jobs:
           echo "::group::Starting AI QA Engineer"
           START_TIME=$(date +%s)
 
-          # 5 minute timeout, max 50 turns (each MCP call = 1 turn)
+          # 5 minute timeout, max 15 turns - be aggressive about speed
           timeout 300 npx @anthropic-ai/claude-code --print \
-            --dangerously-skip-permissions \
             --mcp-config .claude/mcp-config.json \
-            --max-turns 50 \
+            --max-turns 15 \
             "SPEED IS CRITICAL. You have 3 minutes max.
 
              Test $TEST_URL:
