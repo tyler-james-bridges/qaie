@@ -1,0 +1,40 @@
+# Example: Playwright + AI QA with Vercel Preview
+#
+# Copy this to your repo: .github/workflows/playwright-qa.yml
+#
+# Prerequisites:
+# 1. Your repo has Playwright tests
+# 2. Your repo deploys to Vercel
+# 3. Add ANTHROPIC_API_KEY to repo secrets
+
+name: Playwright + AI QA
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  wait-for-preview:
+    name: Wait for Preview
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.vercel.outputs.url }}
+    steps:
+      - name: Wait for Vercel Preview
+        id: vercel
+        uses: patrickedqvist/wait-for-vercel-preview@v1.3.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          max_timeout: 300
+          check_interval: 10
+
+  test:
+    name: Test
+    needs: wait-for-preview
+    uses: tyler-james-bridges/ai-qa-engineer/.github/workflows/playwright-qa.yml@main
+    with:
+      preview_url: ${{ needs.wait-for-preview.outputs.url }}
+      # working_directory: '.'  # Uncomment if playwright.config is in a subdirectory
+      # test_command: 'npm test' # Uncomment to customize test command
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

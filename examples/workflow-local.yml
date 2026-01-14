@@ -1,0 +1,22 @@
+# Example: Playwright + AI QA running against localhost
+#
+# Copy this to your repo: .github/workflows/playwright-qa.yml
+#
+# Use this if your Playwright tests run against a local dev server
+# (The AI QA analysis will be skipped since there's no public URL)
+
+name: Playwright Tests
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+jobs:
+  test:
+    uses: tyler-james-bridges/ai-qa-engineer/.github/workflows/playwright-qa.yml@main
+    with:
+      # No preview_url - tests will run against localhost (as configured in playwright.config)
+      # AI QA will be skipped, but Playwright results will still be posted to PR
+      working_directory: '.'

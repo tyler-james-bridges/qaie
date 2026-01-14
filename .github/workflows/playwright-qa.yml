@@ -1,0 +1,223 @@
+name: Playwright + AI QA
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: 'Directory containing playwright.config (default: repo root)'
+        required: false
+        type: string
+        default: '.'
+      test_command:
+        description: 'Command to run tests (default: npx playwright test)'
+        required: false
+        type: string
+        default: 'npx playwright test'
+      preview_url:
+        description: 'Preview URL to test against (optional - uses baseURL from config if not provided)'
+        required: false
+        type: string
+      node_version:
+        description: 'Node.js version'
+        required: false
+        type: string
+        default: '20'
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+
+jobs:
+  playwright-qa:
+    name: Playwright + AI QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ inputs.working_directory }}
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: ${{ inputs.working_directory }}
+
+      - name: Run Playwright tests
+        id: playwright
+        run: |
+          # Run tests with HTML reporter, continue even if tests fail
+          ${{ inputs.test_command }} --reporter=html,json || true
+
+          # Check if report was generated
+          if [ -d "playwright-report" ]; then
+            echo "report_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "report_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Parse test results if JSON exists
+          if [ -f "test-results.json" ]; then
+            total=$(jq '.stats.expected + .stats.unexpected + .stats.flaky + .stats.skipped' test-results.json 2>/dev/null || echo "0")
+            passed=$(jq '.stats.expected' test-results.json 2>/dev/null || echo "0")
+            failed=$(jq '.stats.unexpected' test-results.json 2>/dev/null || echo "0")
+            flaky=$(jq '.stats.flaky' test-results.json 2>/dev/null || echo "0")
+            skipped=$(jq '.stats.skipped' test-results.json 2>/dev/null || echo "0")
+
+            echo "total=$total" >> $GITHUB_OUTPUT
+            echo "passed=$passed" >> $GITHUB_OUTPUT
+            echo "failed=$failed" >> $GITHUB_OUTPUT
+            echo "flaky=$flaky" >> $GITHUB_OUTPUT
+            echo "skipped=$skipped" >> $GITHUB_OUTPUT
+          fi
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ inputs.preview_url }}
+
+      - name: Checkout ai-qa-engineer
+        uses: actions/checkout@v4
+        with:
+          repository: tyler-james-bridges/ai-qa-engineer
+          ref: main
+          path: _ai-qa-engineer
+
+      - name: Setup AI QA Engineer
+        run: |
+          cd _ai-qa-engineer
+          npm ci
+          npx playwright install chromium
+
+      - name: Run AI QA Analysis
+        id: ai-qa
+        if: ${{ inputs.preview_url != '' }}
+        run: |
+          cd _ai-qa-engineer
+          node src/index.js
+        env:
+          URL: ${{ inputs.preview_url }}
+          VIEWPORTS: desktop,mobile
+          FOCUS: all
+          OUTPUT_FORMAT: markdown
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        continue-on-error: true
+
+      - name: Upload Playwright Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: ${{ inputs.working_directory }}/playwright-report/
+          retention-days: 14
+
+      - name: Upload AI QA Screenshots
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.preview_url != ''
+        with:
+          name: ai-qa-screenshots
+          path: _ai-qa-engineer/screenshots/
+          retention-days: 14
+
+      - name: Post Results to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Build comment
+            let comment = '## 🎭 Playwright + AI QA Report\n\n';
+
+            // Playwright results
+            const total = '${{ steps.playwright.outputs.total }}' || '0';
+            const passed = '${{ steps.playwright.outputs.passed }}' || '0';
+            const failed = '${{ steps.playwright.outputs.failed }}' || '0';
+            const flaky = '${{ steps.playwright.outputs.flaky }}' || '0';
+            const skipped = '${{ steps.playwright.outputs.skipped }}' || '0';
+
+            comment += '### 🧪 Playwright Test Results\n\n';
+
+            if (total !== '0') {
+              const passRate = ((parseInt(passed) / parseInt(total)) * 100).toFixed(1);
+              const statusEmoji = failed === '0' ? '✅' : '❌';
+
+              comment += `| Status | Count |\n`;
+              comment += `|--------|-------|\n`;
+              comment += `| ${statusEmoji} Passed | ${passed} |\n`;
+              if (failed !== '0') comment += `| ❌ Failed | ${failed} |\n`;
+              if (flaky !== '0') comment += `| ⚠️ Flaky | ${flaky} |\n`;
+              if (skipped !== '0') comment += `| ⏭️ Skipped | ${skipped} |\n`;
+              comment += `| **Total** | **${total}** |\n\n`;
+              comment += `**Pass Rate:** ${passRate}%\n\n`;
+            } else {
+              comment += '_No test results found_\n\n';
+            }
+
+            // AI QA results
+            const previewUrl = '${{ inputs.preview_url }}';
+            if (previewUrl) {
+              comment += '### 🤖 AI QA Analysis\n\n';
+
+              const aiReportPath = '_ai-qa-engineer/qa-report.md';
+              if (fs.existsSync(aiReportPath)) {
+                let aiReport = fs.readFileSync(aiReportPath, 'utf8');
+                // Remove the header since we have our own
+                aiReport = aiReport.replace(/^# QA Report\n+/, '');
+                comment += aiReport + '\n\n';
+              } else {
+                comment += '_AI QA analysis did not complete_\n\n';
+              }
+            }
+
+            // Artifacts link
+            comment += '---\n';
+            comment += `📊 **[View Full Playwright Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})**\n\n`;
+            comment += '_Download the `playwright-report` artifact and run `npx playwright show-report` to view interactive results_\n';
+
+            // Find or update existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' &&
+              c.body.includes('Playwright + AI QA Report')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+      - name: Fail if tests failed
+        if: steps.playwright.outputs.failed != '0' && steps.playwright.outputs.failed != ''
+        run: |
+          echo "❌ ${{ steps.playwright.outputs.failed }} test(s) failed"
+          exit 1
