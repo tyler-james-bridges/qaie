@@ -134,6 +134,45 @@ async function capturePageData(page, viewports) {
   };
   page.on('response', responseHandler);
 
+  // Capture ARIA snapshot for accessibility analysis
+  let ariaSnapshot = null;
+  try {
+    ariaSnapshot = await page.accessibility.snapshot();
+    if (ariaSnapshot) {
+      ariaSnapshot = JSON.stringify(ariaSnapshot, null, 2).slice(0, 8000);
+    }
+  } catch {
+    // accessibility.snapshot() may not be available in all contexts
+  }
+
+  // Capture DOM summary
+  let domSummary = null;
+  try {
+    /* eslint-disable no-undef */
+    domSummary = await page.evaluate(() => {
+      const headings = [...document.querySelectorAll('h1,h2,h3,h4,h5,h6')]
+        .map(h => `${h.tagName}: ${h.textContent.trim().slice(0, 80)}`);
+      const links = document.querySelectorAll('a[href]').length;
+      const buttons = document.querySelectorAll('button').length;
+      const inputs = document.querySelectorAll('input,textarea,select').length;
+      const images = [...document.querySelectorAll('img')]
+        .map(img => ({
+          src: img.src.slice(0, 100),
+          alt: img.alt || '(no alt)',
+        }));
+      const noAlt = images.filter(i => i.alt === '(no alt)').length;
+
+      return [
+        'Headings: ' + (headings.join(' | ') || 'None'),
+        'Links: ' + links + ', Buttons: ' + buttons + ', Inputs: ' + inputs,
+        'Images: ' + images.length + ' total, ' + noAlt + ' missing alt text',
+      ].join('\n');
+    });
+    /* eslint-enable no-undef */
+  } catch {
+    // DOM evaluation may fail in some contexts
+  }
+
   // Store original viewport
   const originalViewport = page.viewportSize();
 
@@ -181,6 +220,8 @@ async function capturePageData(page, viewports) {
     consoleErrors,
     networkErrors,
     screenshots,
+    ariaSnapshot,
+    domSummary,
   };
 }
 
