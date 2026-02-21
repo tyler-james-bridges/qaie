@@ -282,5 +282,3 @@ function generateMarkdownReport(report) {
 
   return lines.join('\n');
 }
-
-main();
