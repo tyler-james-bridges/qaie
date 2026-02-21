@@ -19,8 +19,66 @@ if (command === 'review') {
     console.error('\nError:', err.message);
     process.exit(1);
   });
-} else {
+} else if (command === 'help' || command === '--help' || command === '-h') {
+  printHelp();
+} else if (command === '--version' || command === '-v') {
+  printVersion();
+} else if (command === 'scan' || !command) {
   main();
+} else {
+  console.error(`Unknown command: ${command}`);
+  console.error('Run "qai help" for usage information.');
+  process.exit(1);
+}
+
+function printVersion() {
+  const pkg = require('../package.json');
+  console.log(`qai v${pkg.version}`);
+}
+
+function printHelp() {
+  const pkg = require('../package.json');
+  console.log(`
+qai v${pkg.version} - AI-powered QA engineer
+
+Usage:
+  qai scan <url>                    Visual QA analysis
+  qai review <pr> [options]         PR code review
+  qai generate <url|file> [options] Test generation
+  qai help                          Show this help
+  qai --version                     Show version
+
+Scan options:
+  URL=<url>                   Target URL (or set via env)
+  VIEWPORTS=desktop,mobile    Viewports to test
+  FOCUS=all|accessibility|visual|responsive|forms|performance
+
+Review options:
+  <number>                    PR number to review
+  --base <branch>             Base branch for diff (default: main)
+  --focus <area>              Focus: all|security|performance|bugs
+  --json                      Output JSON instead of markdown
+
+Generate options:
+  <url>                       Crawl site and generate E2E tests
+  <file|dir>                  Generate unit tests from source
+  --out <dir>                 Output directory (default: ./tests/generated)
+  --framework <name>          playwright|jest|vitest
+  --dry-run                   Print to stdout instead of writing files
+
+Environment:
+  ANTHROPIC_API_KEY           Use Anthropic Claude
+  OPENAI_API_KEY              Use OpenAI GPT-4
+  GEMINI_API_KEY              Use Google Gemini
+  OLLAMA_HOST                 Use Ollama (local)
+
+Examples:
+  qai scan https://mysite.com
+  qai review 42
+  qai review --base main --focus security
+  qai generate https://mysite.com
+  qai generate src/utils.ts --dry-run
+  `);
 }
 
 /**
