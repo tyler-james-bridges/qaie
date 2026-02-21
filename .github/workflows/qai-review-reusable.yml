@@ -1,0 +1,82 @@
+name: QAI Code Review (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: 'AI provider to use (anthropic or openai)'
+        required: false
+        type: string
+        default: 'anthropic'
+      node-version:
+        description: 'Node.js version'
+        required: false
+        type: string
+        default: '20'
+      qai-version:
+        description: 'qai-cli version (npm version specifier)'
+        required: false
+        type: string
+        default: 'latest'
+    secrets:
+      api-key:
+        description: 'API key for the chosen provider'
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install qai-cli
+        run: npm install -g qai-cli@${{ inputs.qai-version }}
+
+      - name: Run QAI Review
+        id: review
+        env:
+          ANTHROPIC_API_KEY: ${{ inputs.provider == 'anthropic' && secrets.api-key || '' }}
+          OPENAI_API_KEY: ${{ inputs.provider == 'openai' && secrets.api-key || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          REVIEW=$(qai review ${{ github.event.pull_request.number }} --json 2>&1)
+          EXIT_CODE=$?
+          echo "$REVIEW" > review-output.json
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Post Review Comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY=$(cat review-output.json)
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "## 🤖 QAI Code Review
+
+          <details>
+          <summary>Review Details</summary>
+
+          \`\`\`json
+          $BODY
+          \`\`\`
+
+          </details>"
+
+      - name: Fail on Critical Issues
+        if: steps.review.outputs.exit_code == '1'
+        run: |
+          echo "::error::QAI review found critical issues"
+          exit 1
